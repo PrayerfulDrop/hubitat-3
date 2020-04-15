@@ -32,10 +32,10 @@ preferences {
         input "dryerMeter", "capability.powerMeter", title: "Dryer Power Meter"
 		input "resetButton", "capability.pushableButton", title: "Reset Button"
         input "resetAuto","bool", defaultValue: false, title: "Auto-reset machines back to idle?", submitOnChange: true
-        if(resetAuto) input "resetMin", "text", defaultValue: "60", title: "Number of minutes before reseting?"
+        if(resetAuto) input "resetMin", "int", defaultValue: 15, title: "Number of minutes before resetting?", submitOnChange: true
 	}
 	section( "Notifications:" ) {
-        input "wd-message", "text", title: "Notification message? (use {machine} as variable)", defaultValue: "The {machine} has finished a load of laundry.", required:true
+        input "wdmessage", "text", title: "Notification message? (use {device} as variable)", defaultValue: "The {device} has finished a load of laundry.", require:false, submitOnChange: true
         input(name: "speechmode", type: "bool", defaultValue: "false", title: "Use Speech Speaker(s) for TTS?", description: "Speech Speaker(s)?", submitOnChange: true)
         if (speechmode) {
             input "speechspeaker", "capability.speechSynthesis", title: "Choose speaker(s)", required: false, multiple: true, submitOnChange: true
@@ -95,7 +95,7 @@ def init() {
 ///
 
 def createChildren() {
-    if(logEnable) log.trace "creating Laundry Manager children"
+    if(logEnable) log.trace "Checking for Laundry Manager children devices"
     
     if (washerMeter) {
         createChild("laundry-machine-washer", "Laundry Washer")
@@ -109,17 +109,17 @@ def createChildren() {
 def createChild(dni, label) {
     def child = getChildDevice(dni)
     if (child) {
-        if(logEnable) log.warn "Device (${dni}) already exists"
+        //if(logEnable) log.warn "Device (${dni}) already exists"
         subscribeToChild(child)
 	} else {
         try {
-        	if(logEnable) log.debug "attempting to create child device"
+        	if(logEnable) log.debug "Attempting to create child device"
             def newChild = addChildDevice("augoisms", "Laundry Machine", dni, null, [name: label])
-            if(logEnable) log.trace "created ${newChild.displayName} with id $dni"
+            if(logEnable) log.trace "Created ${newChild.displayName} with id $dni"
             subscribeToChild(newChild)
         }
         catch (Exception e) {
-        	if(logEnable) log.debug "error creating child device"
+        	if(logEnable) log.error "Error creating child device"
         	if(logEnable) log.trace e
         }
     	
@@ -186,6 +186,20 @@ def dryerPowerHandler(evt) {
     dryer.updatePower(watts)
 }
 
+def resetHandler() {
+    def washer = getChildDevice("laundry-machine-washer")
+    if(washer.currentValue("status") == "Finished") {
+    	if(logEnable) log.debug "resetting washer"
+        washer.resetFinished()
+    }
+    
+    def dryer = getChildDevice("laundry-machine-dryer")
+    if(dryer.currentValue("status") == "Finished") {
+    	if(logEnable) log.debug "resetting dryer"
+        dryer.resetFinished()
+    }
+}
+
 ///
 /// other methods
 ///
@@ -195,15 +209,15 @@ def statusCheck(device, deviceName, handlerName) {
     if (logEnable) log.debug "${deviceName} Status: ${status}"
     if (status == "Finished") {
     	// send notification
-        msg = wd-message.replace("{message}", "${deviceName}")
+        msg = wdmessage
+        msg = msg.replace("{device}", "${deviceName.toLowerCase()}")
         send(msg)
         if(resetAuto) {
-            runIn(resetMin.toInteger()*60, dryer.resetFinished)
-            runIn(resetMin.toInteger()*60, washer.resetFinished)
+            runIn(resetMin * 60, resetHandler)
         }
         // schedule repeat notification
         if(repeat) {
-        	if(logEnable) log.debug "scheduling a repeat notification"
+        	if(logEnable) log.debug "Scheduling a repeat notification"
             runIn(repeatInterval * 60, handlerName)
         }
     }
@@ -213,12 +227,12 @@ private send(msg) {
     def modeTTSOkay = !ttsmodes || ttsmodes.contains(location.mode)
 	def modeOkay = !modes || modes.contains(location.mode)
     if (sendPushMessage != "No" && modeOkay) {
-		if(logEnable) log.debug("sending push message")		
+		if(logEnable) log.debug("Sending push message")		
         notificationDevices.each{ device -> 
             device.deviceNotification(msg)
         }
 	}
-    log.debug "**** Speechmode: ${speechmode} modeTTSOkay: ${modeTTSOkay}"
+    if (logEnable) log.debug "**** Speechmode: ${speechmode} modeTTSOkay: ${modeTTSOkay}"
     if (speechmode != "No" && modeTTSOkay) {
 			try {
                 speechspeaker.initialize() 
@@ -234,7 +248,7 @@ private send(msg) {
             catch (any) { if (logEnable) log.debug "Speech speaker doesn't support volume level command" }
                 
 			if (logEnable) log.debug "Sending alert to Google and Speech Speaker(s)"
-            msg = alertmsg.toLowerCase()
+            msg = msg.toLowerCase()
             speechspeaker.speak(msg)
             
             try {
